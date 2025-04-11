@@ -1,121 +1,160 @@
+# gdp_dashboard.py
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
 import plotly.express as px
+from pathlib import Path
 
 # Configuration de la page
 st.set_page_config(
-    page_title='GDP Dashboard',
-    page_icon=':earth_americas:',
-    layout='wide',
-    initial_sidebar_state='expanded'
+    page_title="Dashboard PIB Mondial",
+    page_icon="🌍",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# -----------------------------------------------------------------------------
-# Fonctions utilitaires avec cache
+# Chemin local vers les données (adaptez-le à votre structure)
+DATA_PATH = "data/gdp_data.csv"
 
 @st.cache_data
-def load_raw_data():
-    """Charge les données brutes depuis le fichier CSV"""
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    return pd.read_csv(DATA_FILENAME)
+def load_data():
+    """Charge les données depuis le fichier local"""
+    try:
+        df = pd.read_csv(DATA_PATH)
+        
+        # Transformation des données (format wide to long)
+        years = [str(y) for y in range(1960, 2023)]
+        df_melted = df.melt(
+            id_vars=["Country Name", "Country Code", "Indicator Name", "Indicator Code"],
+            value_vars=years,
+            var_name="Year",
+            value_name="GDP"
+        )
+        
+        df_melted["Year"] = pd.to_numeric(df_melted["Year"])
+        df_melted["GDP (Milliards $)"] = df_melted["GDP"] / 1e9
+        
+        return df, df_melted
+    
+    except FileNotFoundError:
+        st.error(f"Fichier introuvable : {DATA_PATH}")
+        st.stop()
+    except Exception as e:
+        st.error(f"Erreur de chargement : {str(e)}")
+        st.stop()
 
-@st.cache_data
-def get_gdp_data(raw_df):
-    """Transforme les données GDP avec mise en cache"""
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    gdp_df = raw_df.melt(
-        ['Country Name', 'Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+# Interface utilisateur
+def main():
+    st.title("🌍 Analyse du PIB Mondial")
+    st.markdown("""
+    **Dashboard interactif** utilisant des données locales de la Banque Mondiale.
+    """)
+    
+    # Chargement des données
+    raw_df, processed_df = load_data()
+    
+    # Section d'exploration
+    with st.expander("🔍 Aperçu des données brutes (5 premières lignes)"):
+        st.dataframe(raw_df.head(), use_container_width=True)
+        st.download_button(
+            label="Télécharger les données brutes",
+            data=raw_df.to_csv(index=False).encode('utf-8'),
+            file_name="gdp_data_raw.csv",
+            mime="text/csv"
+        )
+    
+    # Sidebar avec filtres
+    with st.sidebar:
+        st.header("Filtres")
+        
+        # Sélection des pays
+        available_countries = processed_df["Country Name"].unique()
+        selected_countries = st.multiselect(
+            "Pays",
+            options=available_countries,
+            default=["France", "Germany", "United States", "China", "Japan"],
+            max_selections=10
+        )
+        
+        # Sélection des années
+        min_year = int(processed_df["Year"].min())
+        max_year = int(processed_df["Year"].max())
+        year_range = st.slider(
+            "Période",
+            min_year, max_year,
+            (2000, max_year)
+        )
+        
+        # Options d'affichage
+        st.header("Options")
+        log_scale = st.checkbox("Échelle logarithmique", False)
+        show_raw = st.checkbox("Afficher données filtrées", False)
+    
+    # Filtrage des données
+    filtered_df = processed_df[
+        (processed_df["Country Name"].isin(selected_countries)) &
+        (processed_df["Year"].between(*year_range))
+    ]
+    
+    if filtered_df.empty:
+        st.warning("Aucune donnée disponible avec ces filtres")
+        return
+    
+    # Visualisation principale
+    st.header("Évolution du PIB")
+    fig = px.line(
+        filtered_df,
+        x="Year",
+        y="GDP (Milliards $)",
+        color="Country Name",
+        hover_name="Country Name",
+        log_y=log_scale,
+        labels={"GDP (Milliards $)": "PIB (en milliards USD)"}
     )
-
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-    gdp_df['GDP (Billion $)'] = gdp_df['GDP'] / 1e9
-    return gdp_df
-
-# -----------------------------------------------------------------------------
-# Chargement des données et affichage initial
-
-st.title(':earth_americas: GDP Dashboard - GitHub Workflow')
-
-# Section d'aperçu des données
-st.header('📊 Data Preview')
-st.write("Voici les 5 premières lignes du dataset brut:")
-
-# Chargement des données brutes
-try:
-    raw_df = load_raw_data()
-    st.dataframe(raw_df.head(5), use_container_width=True)
+    fig.update_layout(height=600)
+    st.plotly_chart(fig, use_container_width=True)
     
-    # Transformation des données
-    gdp_df = get_gdp_data(raw_df)
-    country_names = dict(zip(raw_df['Country Code'], raw_df['Country Name']))
+    # Statistiques comparatives
+    st.header("Comparaison entre pays")
     
-except FileNotFoundError:
-    st.error("Erreur: Le fichier de données n'a pas été trouvé. Vérifiez le chemin dans GitHub.")
-    st.stop()
-
-# -----------------------------------------------------------------------------
-# Interface utilisateur principale
-
-st.divider()
-st.header('🔍 Data Exploration')
-
-with st.sidebar:
-    st.header('Filters')
-    
-    # Sélection des années
-    year_range = st.slider(
-        'Select year range',
-        min_value=gdp_df['Year'].min(),
-        max_value=gdp_df['Year'].max(),
-        value=(gdp_df['Year'].min(), gdp_df['Year'].max())
-    
-    # Sélection des pays avec recherche
-    default_countries = ['DEU', 'FRA', 'GBR', 'USA', 'CHN']
-    selected_countries = st.multiselect(
-        'Select countries',
-        options=gdp_df['Country Code'].unique(),
-        default=default_countries,
-        format_func=lambda x: f"{x} - {country_names.get(x, '?')}"
+    # Calcul des indicateurs
+    pivot_df = filtered_df.pivot_table(
+        index="Country Name",
+        columns="Year",
+        values="GDP (Milliards $)",
+        aggfunc="sum"
     )
+    
+    # Affichage des métriques
+    cols = st.columns(4)
+    for idx, country in enumerate(selected_countries):
+        with cols[idx % 4]:
+            if country in pivot_df.index:
+                latest_year = pivot_df.columns[-1]
+                prev_year = pivot_df.columns[0]
+                
+                current_gdp = pivot_df.loc[country, latest_year]
+                previous_gdp = pivot_df.loc[country, prev_year]
+                
+                growth = (current_gdp / previous_gdp - 1) * 100
+                
+                st.metric(
+                    label=country,
+                    value=f"{current_gdp:,.0f} Md$",
+                    delta=f"{growth:.1f}%",
+                    help=f"De {prev_year} à {latest_year}"
+                )
+    
+    # Données filtrées
+    if show_raw:
+        st.header("Données filtrées")
+        st.dataframe(
+            filtered_df[["Country Name", "Year", "GDP (Milliards $)"]],
+            column_config={
+                "GDP (Milliards $)": st.column_config.NumberColumn(format="%.2f Md$")
+            },
+            hide_index=True,
+            use_container_width=True
+        )
 
-# Filtrage des données
-if not selected_countries:
-    st.warning("Veuillez sélectionner au moins un pays")
-    st.stop()
-
-filtered_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries)) &
-    (gdp_df['Year'].between(*year_range))
-].copy()
-
-# -----------------------------------------------------------------------------
-# Visualisations
-
-st.header('📈 GDP Evolution')
-fig = px.line(
-    filtered_df,
-    x='Year',
-    y='GDP (Billion $)',
-    color='Country Code',
-    hover_name='Country Name',
-    labels={'GDP (Billion $)': 'GDP (in Billion USD)'}
-)
-st.plotly_chart(fig, use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# Pied de page avec info GitHub
-
-st.divider()
-st.caption("""
-**GitHub Workflow Tips:**
-- Le fichier de données doit être dans le dossier `data/`
-- Vérifiez les chemins d'accès relatifs
-- Commit + push pour mettre à jour l'application
-""")
+if __name__ == "__main__":
+    main()
